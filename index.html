@@ -443,12 +443,152 @@ function extractAllText(xml) {
   for (const sp of shapes) {
     // Skip shapes that are just labels like "Exit Ticket"
     const text = extractTextFromShape(sp);
-    if (text && text.toLowerCase() !== 'exit ticket') {
+    if (text && text.trim().toLowerCase() !== 'exit ticket') {
       allTexts.push(text);
     }
   }
 
   return allTexts.join('\n').trim();
+}
+
+function isDrawingMlParagraph(node) {
+  return node && node.nodeType === Node.ELEMENT_NODE &&
+    node.localName === 'p' &&
+    node.namespaceURI === 'http://schemas.openxmlformats.org/drawingml/2006/main';
+}
+
+function getShapeParagraphs(sp) {
+  const paragraphs = [];
+  for (const el of sp.getElementsByTagName('*')) {
+    if (isDrawingMlParagraph(el)) {
+      paragraphs.push(el);
+    }
+  }
+  return paragraphs;
+}
+
+function getParagraphProperties(paragraphNode) {
+  return Array.from(paragraphNode.children).find(child => child.localName === 'pPr') || null;
+}
+
+function getAutoNumberInfo(paragraphNode) {
+  const pPr = getParagraphProperties(paragraphNode);
+  if (!pPr) return null;
+
+  const autoNum = Array.from(pPr.children).find(child => child.localName === 'buAutoNum') || null;
+  if (!autoNum) return null;
+
+  const type = autoNum.getAttribute('type') || 'arabicPlain';
+  const levelAttr = pPr.getAttribute('lvl');
+  const startAtAttr = autoNum.getAttribute('startAt');
+
+  return {
+    type,
+    level: levelAttr === null ? 0 : parseInt(levelAttr, 10) || 0,
+    startAt: startAtAttr === null ? 1 : parseInt(startAtAttr, 10) || 1
+  };
+}
+
+function createNumberingState() {
+  return {
+    active: false,
+    countersByLevel: new Map(),
+    styleKeyByLevel: new Map()
+  };
+}
+
+function formatAutoNumberValue(type, value) {
+  switch (type) {
+    case 'arabicParenR':
+      return `${value})`;
+    case 'arabicPeriod':
+      return `${value}.`;
+    case 'arabicPlain':
+      return `${value}`;
+    case 'alphaLcParenR':
+      return `${toAlphaSequence(value, false)})`;
+    case 'alphaLcPeriod':
+      return `${toAlphaSequence(value, false)}.`;
+    case 'alphaLcPlain':
+      return `${toAlphaSequence(value, false)}`;
+    case 'alphaUcParenR':
+      return `${toAlphaSequence(value, true)})`;
+    case 'alphaUcPeriod':
+      return `${toAlphaSequence(value, true)}.`;
+    case 'alphaUcPlain':
+      return `${toAlphaSequence(value, true)}`;
+    case 'romanLcParenR':
+      return `${toRomanNumeral(value, false)})`;
+    case 'romanLcPeriod':
+      return `${toRomanNumeral(value, false)}.`;
+    case 'romanLcPlain':
+      return `${toRomanNumeral(value, false)}`;
+    case 'romanUcParenR':
+      return `${toRomanNumeral(value, true)})`;
+    case 'romanUcPeriod':
+      return `${toRomanNumeral(value, true)}.`;
+    case 'romanUcPlain':
+      return `${toRomanNumeral(value, true)}`;
+    default:
+      return `${value}`;
+  }
+}
+
+function toAlphaSequence(value, upperCase) {
+  const index = Math.max(1, value);
+  let n = index;
+  let result = '';
+
+  while (n > 0) {
+    n -= 1;
+    result = String.fromCharCode((upperCase ? 65 : 97) + (n % 26)) + result;
+    n = Math.floor(n / 26);
+  }
+
+  return result;
+}
+
+function toRomanNumeral(value, upperCase) {
+  const numerals = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+    [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+  ];
+
+  let n = Math.max(1, value);
+  let result = '';
+
+  for (const [arabic, roman] of numerals) {
+    while (n >= arabic) {
+      result += roman;
+      n -= arabic;
+    }
+  }
+
+  return upperCase ? result : result.toLowerCase();
+}
+
+function getNumberedParagraphPrefix(paragraphNode, numberingState) {
+  const autoNumber = getAutoNumberInfo(paragraphNode);
+  if (!autoNumber) {
+    numberingState.active = false;
+    numberingState.countersByLevel.clear();
+    numberingState.styleKeyByLevel.clear();
+    return '';
+  }
+
+  const styleKey = `${autoNumber.type}:${autoNumber.startAt}`;
+  const previousStyle = numberingState.styleKeyByLevel.get(autoNumber.level);
+  const previousValue = numberingState.countersByLevel.get(autoNumber.level);
+  const nextValue = numberingState.active && previousStyle === styleKey && typeof previousValue === 'number'
+    ? previousValue + 1
+    : autoNumber.startAt;
+
+  numberingState.active = true;
+  numberingState.styleKeyByLevel.set(autoNumber.level, styleKey);
+  numberingState.countersByLevel.set(autoNumber.level, nextValue);
+
+  return formatAutoNumberValue(autoNumber.type, nextValue) + ' ';
 }
 
 // Find all <p:sp> elements, including those nested inside <mc:Choice>
@@ -481,23 +621,28 @@ function findAllShapes(doc) {
 
 // Extract text from a single shape without flattening nested Office Math XML.
 function extractTextFromShape(sp) {
-  const paragraphs = Array.from(sp.getElementsByTagName('*'))
-    .filter(el => el.localName === 'p' &&
-                  el.namespaceURI &&
-                  el.namespaceURI.includes('drawingml'))
-    .map(extractParagraphText);
+  const numberingState = createNumberingState();
+  const paragraphs = getShapeParagraphs(sp)
+    .map(paragraphNode => extractParagraphText(paragraphNode, numberingState))
+    .filter(paragraph => paragraph !== null && paragraph !== undefined);
 
-  return paragraphs
-    .filter(p => p.trim())
-    .map(p => p.trim())
-    .join('\n')
-    .trim();
+  return paragraphs.join('\n').trim();
 }
 
-function extractParagraphText(paragraphNode) {
-  return normalizeMathText(Array.from(paragraphNode.childNodes)
+function extractParagraphText(paragraphNode, numberingState) {
+  const bodyText = Array.from(paragraphNode.childNodes)
     .map(nodeToText)
-    .join(''));
+    .join('');
+  const prefix = getNumberedParagraphPrefix(paragraphNode, numberingState);
+  const beforeNormalization = `${prefix}${bodyText}`;
+  const afterNormalization = normalizeMathText(beforeNormalization);
+
+  if (DEBUG_MATH && prefix) {
+    console.log('[Exit ticket paragraph before]', bodyText);
+    console.log('[Exit ticket paragraph after]', afterNormalization);
+  }
+
+  return afterNormalization.trim();
 }
 
 function nodeToText(node) {
@@ -519,40 +664,101 @@ function nodeToText(node) {
 }
 
 function officeMathToText(mathNode) {
+  const beforeNormalization = officeMathNodeToText(mathNode).text;
+  const afterNormalization = applyFractionCoefficientFallback(normalizeMathText(beforeNormalization));
+
+  if (DEBUG_MATH && mathNode.localName === 'oMath') {
+    console.log('[Office Math XML]', new XMLSerializer().serializeToString(mathNode));
+    console.log('[Office Math before normalisation]', beforeNormalization);
+    console.log('[Office Math after normalisation]', afterNormalization);
+  }
+
+  return afterNormalization;
+}
+
+function officeMathNodeToText(mathNode) {
   const localName = mathNode.localName;
-  let text = '';
 
   if (localName === 'f' || localName === 'frac') {
     const numerator = directChildByLocalName(mathNode, 'num');
     const denominator = directChildByLocalName(mathNode, 'den');
-    const numText = numerator ? officeMathToText(numerator) : '';
-    const denText = denominator ? officeMathToText(denominator) : '';
-    text = `${formatFractionPart(numText)}/${formatFractionPart(denText)}`;
-  } else if (localName === 'sSup') {
-    text = `${officeMathChildText(mathNode, 'e')}^${officeMathChildText(mathNode, 'sup')}`;
-  } else if (localName === 'sSub') {
-    text = `${officeMathChildText(mathNode, 'e')}_${officeMathChildText(mathNode, 'sub')}`;
-  } else if (localName === 'rad') {
-    text = `sqrt(${officeMathChildText(mathNode, 'e')})`;
-  } else if (localName === 'd') {
-    const content = directChildrenByLocalName(mathNode, 'e')
-      .map(officeMathToText)
-      .join(',');
-    text = `${delimiterCharacter(mathNode, 'begChr', '(')}${content}${delimiterCharacter(mathNode, 'endChr', ')')}`;
-  } else if (localName === 't') {
-    text = mathNode.textContent || '';
-  } else {
-    text = Array.from(mathNode.childNodes)
-      .map(child => child.nodeType === Node.ELEMENT_NODE ? officeMathToText(child) : '')
-      .join('');
+    const numText = numerator ? officeMathNodeToText(numerator).text : '';
+    const denText = denominator ? officeMathNodeToText(denominator).text : '';
+    return {
+      text: `${formatFractionPart(numText)}/${formatFractionPart(denText)}`,
+      kind: 'fraction'
+    };
   }
 
-  text = normalizeMathText(text);
-  if (DEBUG_MATH && localName === 'oMath') {
-    console.log('[Office Math XML]', new XMLSerializer().serializeToString(mathNode));
-    console.log('[Office Math text]', text);
+  if (localName === 'sSup') {
+    return {
+      text: `${officeMathChildText(mathNode, 'e')}^${officeMathChildText(mathNode, 'sup')}`,
+      kind: 'atomic'
+    };
   }
-  return text;
+
+  if (localName === 'sSub') {
+    return {
+      text: `${officeMathChildText(mathNode, 'e')}_${officeMathChildText(mathNode, 'sub')}`,
+      kind: 'atomic'
+    };
+  }
+
+  if (localName === 'rad') {
+    return {
+      text: `sqrt(${officeMathChildText(mathNode, 'e')})`,
+      kind: 'atomic'
+    };
+  }
+
+  if (localName === 'd') {
+    const content = directChildrenByLocalName(mathNode, 'e')
+      .map(child => officeMathNodeToText(child).text)
+      .join(',');
+    return {
+      text: `${delimiterCharacter(mathNode, 'begChr', '(')}${content}${delimiterCharacter(mathNode, 'endChr', ')')}`,
+      kind: 'atomic'
+    };
+  }
+
+  if (localName === 't') {
+    return {
+      text: mathNode.textContent || '',
+      kind: 'text'
+    };
+  }
+
+  const childParts = Array.from(mathNode.childNodes)
+    .map(child => child.nodeType === Node.ELEMENT_NODE ? officeMathNodeToText(child) : null)
+    .filter(Boolean);
+
+  return mergeOfficeMathParts(childParts);
+}
+
+function mergeOfficeMathParts(parts) {
+  const merged = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const current = parts[i];
+    const next = parts[i + 1];
+
+    if (current.kind === 'fraction' && next && isCoefficientContinuation(next.text)) {
+      // Keep the fraction in brackets when it behaves like a coefficient, e.g.
+      // 1/5g => (1/5)g, so the variable stays outside the fraction.
+      merged.push({
+        text: `(${current.text})`,
+        kind: 'atomic'
+      });
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return {
+    text: merged.map(part => part.text).join(''),
+    kind: 'atomic'
+  };
 }
 
 function isOfficeMathNode(node) {
@@ -574,7 +780,24 @@ function officeMathChildText(node, localName) {
 
 function formatFractionPart(text) {
   const trimmed = text.trim();
-  return /[\s+\-\u00D7\u00F7=<>/]/.test(trimmed) ? `(${trimmed})` : trimmed;
+  const normalized = normalizeMathText(trimmed);
+  if (/[\s+\-\u00D7\u00F7=<>/]/.test(normalized)) return `(${trimmed})`;
+  if (/[A-Za-z]/.test(normalized) && !/^[A-Za-z]$/.test(normalized)) return `(${trimmed})`;
+  return trimmed;
+}
+
+function isCoefficientContinuation(text) {
+  const trimmed = normalizeMathText(text.trim());
+  return /^[A-Za-z(]/.test(trimmed);
+}
+
+function applyFractionCoefficientFallback(text) {
+  // A conservative fallback for cases where the math XML was flattened into a
+  // coefficient-like string such as 1/5g. We only rewrite the simplest numeric
+  // fraction + variable cases so genuine denominators are left alone.
+  return text
+    .replace(/(^|[=+\-*/\s(])(\d+\/\d+)(?=[A-Za-z])/g, (match, prefix, fraction) => `${prefix}(${fraction})`)
+    .replace(/(^|[=+\-*/\s(])(\d+\/\d+)(?=\()/g, (match, prefix, fraction) => `${prefix}(${fraction})`);
 }
 
 function delimiterCharacter(node, localName, fallback) {
