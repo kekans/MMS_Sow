@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scheme of Work Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: #f5f0eb;
+    color: #1a1a1a;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.25rem;
+    color: #8b1a2b;
+  }
+
+  .subtitle {
+    font-size: 0.95rem;
+    color: #6b6b6b;
+    margin-bottom: 2.5rem;
+    line-height: 1.5;
+  }
+
+  .drop-zone {
+    border: 2px dashed #c4a88e;
+    border-radius: 16px;
+    padding: 4rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    background: #faf7f4;
+    position: relative;
+  }
+
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: #8b1a2b;
+    background: #fdf5f7;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(139, 26, 43, 0.08);
+  }
+
+  .drop-zone input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .drop-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .drop-text {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #8b1a2b;
+    margin-bottom: 0.4rem;
+  }
+
+  .drop-hint {
+    font-size: 0.85rem;
+    color: #999;
+  }
+
+  .status {
+    margin-top: 2rem;
+    padding: 1.25rem 1.5rem;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    display: none;
+  }
+
+  .status.info {
+    background: #eef4ff;
+    color: #2a5db0;
+    display: block;
+  }
+
+  .status.success {
+    background: #edfcf2;
+    color: #1a7a3a;
+    display: block;
+  }
+
+  .status.error {
+    background: #fef2f2;
+    color: #b91c1c;
+    display: block;
+  }
+
+  .preview-section {
+    margin-top: 2.5rem;
+    display: none;
+  }
+
+  .preview-section.visible { display: block; }
+
+  .preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .preview-header h2 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #1a1a1a;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1.5rem;
+    background: #8b1a2b;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn:hover {
+    background: #6d1422;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 26, 43, 0.25);
+  }
+
+  .preview-table-wrap {
+    overflow-x: auto;
+    border-radius: 12px;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+  }
+
+  .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    font-size: 0.82rem;
+  }
+
+  .preview-table thead th {
+    background: #8b1a2b;
+    color: #fff;
+    padding: 0.75rem 0.9rem;
+    text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .preview-table tbody td {
+    padding: 0.65rem 0.9rem;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+    max-width: 250px;
+    white-space: pre-line;
+    line-height: 1.45;
+  }
+
+  .preview-table tbody tr:hover { background: #faf7f4; }
+
+  .lesson-num {
+    font-weight: 700;
+    color: #8b1a2b;
+    text-align: center;
+  }
+
+  .editable {
+    min-height: 1.2em;
+    outline: none;
+    border-radius: 4px;
+    padding: 2px 4px;
+    transition: background 0.15s;
+  }
+
+  .editable:hover { background: #f5f0eb; }
+  .editable:focus { background: #eef4ff; box-shadow: 0 0 0 2px rgba(42, 93, 176, 0.2); }
+
+  .spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 2px solid rgba(42, 93, 176, 0.3);
+    border-top-color: #2a5db0;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  footer {
+    margin-top: 3rem;
+    text-align: center;
+    font-size: 0.78rem;
+    color: #aaa;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Scheme of Work Generator</h1>
+  <p class="subtitle">
+    Upload your lesson PPTX and get a formatted Scheme of Work spreadsheet.
+    Detects both lesson overview layouts automatically. Everything runs in your browser — nothing is uploaded anywhere.
+  </p>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".pptx">
+    <span class="drop-icon">📎</span>
+    <div class="drop-text">Drop your .pptx here or click to browse</div>
+    <div class="drop-hint">Detects "Lesson overview" and "Exit ticket" layout slides automatically</div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <div class="preview-section" id="previewSection">
+    <div class="preview-header">
+      <h2 id="previewTitle">Preview</h2>
+      <button class="btn" id="downloadBtn" onclick="downloadXlsx()">⬇ Download .xlsx</button>
+    </div>
+    <div class="preview-table-wrap">
+      <table class="preview-table" id="previewTable">
+        <thead>
+          <tr>
+            <th>Lesson</th>
+            <th>Lesson title</th>
+            <th>Prior knowledge</th>
+            <th>Learning Objectives</th>
+            <th>Example question</th>
+            <th>New vocabulary</th>
+          </tr>
+        </thead>
+        <tbody id="previewBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>All processing happens locally in your browser. No data leaves your machine.</footer>
+</div>
+
+<script>
+const COLUMNS = ['Lesson', 'Lesson title', 'Prior knowledge', 'Learning Objectives', 'Example question', 'New vocabulary'];
+
+// Placeholder idx → column mapping
+// idx 10 = title (parsed into lesson number + title)
+// idx 12 = learning objectives
+// idx 19 = prior learning
+// idx 22 = example ET questions
+const FIELD_MAP = {
+  10: 'title',
+  12: 'learningObjectives',
+  19: 'priorKnowledge',
+  22: 'exampleQuestion'
+};
+
+let extractedLessons = [];
+const DEBUG_MATH = false;
+
+// Drop zone
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function setStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.className = 'status ' + type;
+  el.innerHTML = msg;
+}
+
+async function handleFile(file) {
+  if (!file.name.endsWith('.pptx')) {
+    setStatus('Please upload a .pptx file.', 'error');
+    return;
+  }
+  setStatus('<span class="spinner"></span> Parsing presentation…', 'info');
+
+  try {
+    const zip = await JSZip.loadAsync(file);
+    extractedLessons = await parsePptx(zip);
+
+    if (extractedLessons.length === 0) {
+      setStatus('No lesson overview slides found. Make sure the PPTX uses layouts named "Lesson overview" or "1_Lesson overview". Exit ticket slides are optional.', 'error');
+      return;
+    }
+
+    setStatus(`Found <strong>${extractedLessons.length}</strong> lesson overview slide${extractedLessons.length > 1 ? 's' : ''}. Exit ticket questions are pulled automatically where found. You can edit cells below before downloading.`, 'success');
+    renderPreview();
+  } catch (err) {
+    console.error(err);
+    setStatus('Error parsing file: ' + err.message, 'error');
+  }
+}
+
+// ---- PPTX PARSING ----
+
+async function parsePptx(zip) {
+  // 1. Find layout files and their names
+  const layoutNames = {};
+  for (const path of Object.keys(zip.files)) {
+    const m = path.match(/^ppt\/slideLayouts\/(slideLayout\d+\.xml)$/);
+    if (m) {
+      const xml = await zip.file(path).async('text');
+      const nameMatch = xml.match(/<p:cSld[^>]*name="([^"]*)"/) ||
+                        xml.match(/<p:cSld[^>]*name='([^']*)'/);
+      if (nameMatch) {
+        layoutNames[m[1]] = nameMatch[1];
+      }
+    }
+  }
+
+  // 2. Build ordered list of all slides with their layout types
+  const slideFiles = Object.keys(zip.files)
+    .filter(p => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)/)[1]);
+      const nb = parseInt(b.match(/slide(\d+)/)[1]);
+      return na - nb;
+    });
+
+  const slideInfo = []; // { slideNum, layoutName, path }
+
+  for (const slidePath of slideFiles) {
+    const slideNum = slidePath.match(/slide(\d+)/)[1];
+    const relsPath = `ppt/slides/_rels/slide${slideNum}.xml.rels`;
+    let layoutName = '';
+    if (zip.files[relsPath]) {
+      const relsXml = await zip.file(relsPath).async('text');
+      const layoutMatch = relsXml.match(/Target="\.\.\/slideLayouts\/(slideLayout\d+\.xml)"/);
+      if (layoutMatch) {
+        layoutName = layoutNames[layoutMatch[1]] || '';
+      }
+    }
+    slideInfo.push({ slideNum, layoutName, path: slidePath });
+  }
+
+  // 3. Walk slides in order: pair each lesson overview with the next exit ticket
+  const lessons = [];
+
+  for (let i = 0; i < slideInfo.length; i++) {
+    const si = slideInfo[i];
+    if (!si.layoutName.toLowerCase().includes('lesson overview')) continue;
+
+    // Parse lesson overview slide
+    const slideXml = await zip.file(si.path).async('text');
+    const fields = extractFields(slideXml);
+
+    if (!fields.title && !fields.learningObjectives) continue;
+
+    // Look ahead for the next exit ticket (before the next lesson overview)
+    let exitTicketText = '';
+    for (let j = i + 1; j < slideInfo.length; j++) {
+      const nextLayout = slideInfo[j].layoutName.toLowerCase();
+      if (nextLayout.includes('lesson overview')) break; // hit next lesson, stop
+      if (nextLayout.includes('exit ticket')) {
+        const etXml = await zip.file(slideInfo[j].path).async('text');
+        exitTicketText = extractAllText(etXml);
+        break;
+      }
+    }
+
+    // Exit ticket text overrides the overview's idx 22 placeholder
+    if (exitTicketText) {
+      fields.exampleQuestion = exitTicketText;
+    }
+
+    lessons.push(buildLesson(fields, si.slideNum));
+  }
+
+  return lessons;
+}
+
+// Extract text from specific placeholder indices (for lesson overview slides)
+function extractFields(xml) {
+  const fields = {};
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'text/xml');
+
+  // Find all shape elements (including those inside mc:AlternateContent/mc:Choice)
+  const shapes = findAllShapes(doc);
+
+  for (const sp of shapes) {
+    // Find placeholder element
+    let phEl = null;
+    const allEls = sp.getElementsByTagName('*');
+    for (const el of allEls) {
+      if (el.localName === 'ph') { phEl = el; break; }
+    }
+
+    if (!phEl) continue;
+    const idx = parseInt(phEl.getAttribute('idx'));
+    if (isNaN(idx) || !FIELD_MAP[idx]) continue;
+
+    const text = extractTextFromShape(sp);
+    if (text) {
+      fields[FIELD_MAP[idx]] = text;
+    }
+  }
+
+  return fields;
+}
+
+// Extract ALL text from a slide (for exit tickets — grabs every shape)
+function extractAllText(xml) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'text/xml');
+  const shapes = findAllShapes(doc);
+  const allTexts = [];
+
+  for (const sp of shapes) {
+    // Skip shapes that are just labels like "Exit Ticket"
+    const text = extractTextFromShape(sp);
+    if (text && text.toLowerCase() !== 'exit ticket') {
+      allTexts.push(text);
+    }
+  }
+
+  return allTexts.join('\n').trim();
+}
+
+// Find all <p:sp> elements, including those nested inside <mc:Choice>
+function findAllShapes(doc) {
+  const NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+  const shapes = [];
+
+  // Direct shapes
+  const directShapes = doc.getElementsByTagNameNS(NS_P, 'sp');
+  for (const s of directShapes) shapes.push(s);
+
+  // Also search inside mc:Choice blocks (used when slides contain math equations)
+  // These shapes might not be in the p: namespace if the fallback redefines xmlns
+  const allEls = doc.getElementsByTagName('*');
+  for (const el of allEls) {
+    if (el.localName === 'sp' && !shapes.includes(el)) {
+      // Only include if it's inside a mc:Choice (not mc:Fallback)
+      let parent = el.parentElement;
+      let inFallback = false;
+      while (parent) {
+        if (parent.localName === 'Fallback') { inFallback = true; break; }
+        parent = parent.parentElement;
+      }
+      if (!inFallback) shapes.push(el);
+    }
+  }
+
+  return shapes;
+}
+
+// Extract text from a single shape without flattening nested Office Math XML.
+function extractTextFromShape(sp) {
+  const paragraphs = Array.from(sp.getElementsByTagName('*'))
+    .filter(el => el.localName === 'p' &&
+                  el.namespaceURI &&
+                  el.namespaceURI.includes('drawingml'))
+    .map(extractParagraphText);
+
+  return paragraphs
+    .filter(p => p.trim())
+    .map(p => p.trim())
+    .join('\n')
+    .trim();
+}
+
+function extractParagraphText(paragraphNode) {
+  return normalizeMathText(Array.from(paragraphNode.childNodes)
+    .map(nodeToText)
+    .join(''));
+}
+
+function nodeToText(node) {
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+  if (isOfficeMathNode(node)) {
+    return officeMathToText(node);
+  }
+
+  // a14:m is the DrawingML wrapper around one or more m:oMath blocks.
+  if (node.localName === 'm') {
+    return Array.from(node.childNodes).map(nodeToText).join('');
+  }
+
+  if (node.localName === 't') return node.textContent || '';
+  if (node.localName === 'br') return '\n';
+
+  return Array.from(node.childNodes).map(nodeToText).join('');
+}
+
+function officeMathToText(mathNode) {
+  const localName = mathNode.localName;
+  let text = '';
+
+  if (localName === 'f' || localName === 'frac') {
+    const numerator = directChildByLocalName(mathNode, 'num');
+    const denominator = directChildByLocalName(mathNode, 'den');
+    const numText = numerator ? officeMathToText(numerator) : '';
+    const denText = denominator ? officeMathToText(denominator) : '';
+    text = `${formatFractionPart(numText)}/${formatFractionPart(denText)}`;
+  } else if (localName === 'sSup') {
+    text = `${officeMathChildText(mathNode, 'e')}^${officeMathChildText(mathNode, 'sup')}`;
+  } else if (localName === 'sSub') {
+    text = `${officeMathChildText(mathNode, 'e')}_${officeMathChildText(mathNode, 'sub')}`;
+  } else if (localName === 'rad') {
+    text = `sqrt(${officeMathChildText(mathNode, 'e')})`;
+  } else if (localName === 'd') {
+    const content = directChildrenByLocalName(mathNode, 'e')
+      .map(officeMathToText)
+      .join(',');
+    text = `${delimiterCharacter(mathNode, 'begChr', '(')}${content}${delimiterCharacter(mathNode, 'endChr', ')')}`;
+  } else if (localName === 't') {
+    text = mathNode.textContent || '';
+  } else {
+    text = Array.from(mathNode.childNodes)
+      .map(child => child.nodeType === Node.ELEMENT_NODE ? officeMathToText(child) : '')
+      .join('');
+  }
+
+  text = normalizeMathText(text);
+  if (DEBUG_MATH && localName === 'oMath') {
+    console.log('[Office Math XML]', new XMLSerializer().serializeToString(mathNode));
+    console.log('[Office Math text]', text);
+  }
+  return text;
+}
+
+function isOfficeMathNode(node) {
+  return node.namespaceURI === 'http://schemas.openxmlformats.org/officeDocument/2006/math';
+}
+
+function directChildByLocalName(node, localName) {
+  return directChildrenByLocalName(node, localName)[0] || null;
+}
+
+function directChildrenByLocalName(node, localName) {
+  return Array.from(node.children).filter(child => child.localName === localName);
+}
+
+function officeMathChildText(node, localName) {
+  const child = directChildByLocalName(node, localName);
+  return child ? officeMathToText(child) : '';
+}
+
+function formatFractionPart(text) {
+  const trimmed = text.trim();
+  return /[\s+\-\u00D7\u00F7=<>/]/.test(trimmed) ? `(${trimmed})` : trimmed;
+}
+
+function delimiterCharacter(node, localName, fallback) {
+  const propertyNode = Array.from(node.getElementsByTagName('*'))
+    .find(el => el.localName === localName);
+  if (!propertyNode) return fallback;
+
+  const valueAttribute = Array.from(propertyNode.attributes)
+    .find(attribute => attribute.localName === 'val');
+  return valueAttribute ? valueAttribute.value : fallback;
+}
+
+function normalizeMathText(text) {
+  const replacements = {
+    '\u{1D465}': 'x',
+    '\u{1D466}': 'y',
+    '\u{1D45B}': 'n',
+    '\u{1D44E}': 'a',
+    '\u{1D44F}': 'b',
+    '\u{1D450}': 'c',
+    '\u{1D451}': 'd',
+    '\u{1D454}': 'g',
+    '\u{1D45F}': 'r',
+    '\u{1D464}': 'w',
+    '\u2212': '-'
+  };
+
+  return Array.from(text)
+    .map(character => replacements[character] || normalizeStyledMathCharacter(character))
+    .join('');
+}
+
+function normalizeStyledMathCharacter(character) {
+  const codePoint = character.codePointAt(0);
+  const ranges = [
+    [0x1D400, 0x1D419, 0x41], [0x1D41A, 0x1D433, 0x61],
+    [0x1D434, 0x1D44D, 0x41], [0x1D44E, 0x1D467, 0x61],
+    [0x1D468, 0x1D481, 0x41], [0x1D482, 0x1D49B, 0x61],
+    [0x1D5A0, 0x1D5B9, 0x41], [0x1D5BA, 0x1D5D3, 0x61],
+    [0x1D5D4, 0x1D5ED, 0x41], [0x1D5EE, 0x1D607, 0x61],
+    [0x1D608, 0x1D621, 0x41], [0x1D622, 0x1D63B, 0x61],
+    [0x1D63C, 0x1D655, 0x41], [0x1D656, 0x1D66F, 0x61],
+    [0x1D7CE, 0x1D7D7, 0x30], [0x1D7D8, 0x1D7E1, 0x30],
+    [0x1D7E2, 0x1D7EB, 0x30], [0x1D7EC, 0x1D7F5, 0x30],
+    [0x1D7F6, 0x1D7FF, 0x30]
+  ];
+
+  for (const [start, end, asciiStart] of ranges) {
+    if (codePoint >= start && codePoint <= end) {
+      return String.fromCodePoint(asciiStart + codePoint - start);
+    }
+  }
+
+  return character;
+}
+
+function buildLesson(fields, slideNum) {
+  let lessonNum = '';
+  let lessonTitle = '';
+
+  if (fields.title) {
+    // Parse "Y8U5L3: Forming and solving equations (1)"
+    const titleMatch = fields.title.match(/Y\d+U\d+L(\d+)\s*:\s*(.*)/i);
+    if (titleMatch) {
+      lessonNum = titleMatch[1];
+      lessonTitle = titleMatch[2].trim();
+    } else {
+      const simpleMatch = fields.title.match(/L(\d+)\s*:\s*(.*)/i);
+      if (simpleMatch) {
+        lessonNum = simpleMatch[1];
+        lessonTitle = simpleMatch[2].trim();
+      } else {
+        lessonTitle = fields.title;
+      }
+    }
+  }
+
+  // Add "- " bullet prefix to multi-line fields (LOs and prior knowledge)
+  const addBullets = (text) => {
+    if (!text) return '';
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length <= 1) return text;
+    return lines.map(l => l.startsWith('- ') ? l : '- ' + l).join('\n');
+  };
+
+  return {
+    lesson: lessonNum,
+    lessonTitle: lessonTitle,
+    priorKnowledge: addBullets(fields.priorKnowledge || ''),
+    learningObjectives: addBullets(fields.learningObjectives || ''),
+    exampleQuestion: fields.exampleQuestion || '',
+    newVocabulary: '',
+    _slideNum: slideNum
+  };
+}
+
+// ---- PREVIEW ----
+
+function renderPreview() {
+  const tbody = document.getElementById('previewBody');
+  tbody.innerHTML = '';
+
+  extractedLessons.forEach((lesson, i) => {
+    const tr = document.createElement('tr');
+    const keys = ['lesson', 'lessonTitle', 'priorKnowledge', 'learningObjectives', 'exampleQuestion', 'newVocabulary'];
+    keys.forEach((key, ci) => {
+      const td = document.createElement('td');
+      if (ci === 0) td.classList.add('lesson-num');
+      const div = document.createElement('div');
+      div.contentEditable = true;
+      div.className = 'editable';
+      div.textContent = lesson[key];
+      div.dataset.row = i;
+      div.dataset.key = key;
+      div.addEventListener('blur', function() {
+        extractedLessons[this.dataset.row][this.dataset.key] = this.textContent;
+      });
+      td.appendChild(div);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('previewSection').classList.add('visible');
+  document.getElementById('previewTitle').textContent = `Preview — ${extractedLessons.length} lesson${extractedLessons.length > 1 ? 's' : ''}`;
+}
+
+// ---- XLSX GENERATION ----
+
+function downloadXlsx() {
+  const wb = XLSX.utils.book_new();
+  const wsData = [COLUMNS];
+
+  extractedLessons.forEach(l => {
+    wsData.push([
+      l.lesson ? parseInt(l.lesson) || l.lesson : '',
+      l.lessonTitle,
+      l.priorKnowledge,
+      l.learningObjectives,
+      l.exampleQuestion,
+      l.newVocabulary
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Column widths matching the original scheme of work
+  ws['!cols'] = [
+    { wch: 8 },   // Lesson
+    { wch: 22 },  // Lesson title
+    { wch: 26 },  // Prior knowledge
+    { wch: 36 },  // Learning Objectives
+    { wch: 36 },  // Example question
+    { wch: 18 },  // New vocabulary
+  ];
+
+  // Styling
+  const headerStyle = {
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+    fill: { fgColor: { rgb: '8B1A2B' } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: '000000' } },
+      bottom: { style: 'thin', color: { rgb: '000000' } },
+      left: { style: 'thin', color: { rgb: '000000' } },
+      right: { style: 'thin', color: { rgb: '000000' } }
+    }
+  };
+
+  const cellStyle = {
+    font: { name: 'Calibri', sz: 10 },
+    alignment: { vertical: 'top', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: '000000' } },
+      bottom: { style: 'thin', color: { rgb: '000000' } },
+      left: { style: 'thin', color: { rgb: '000000' } },
+      right: { style: 'thin', color: { rgb: '000000' } }
+    }
+  };
+
+  const lessonNumStyle = {
+    ...cellStyle,
+    font: { name: 'Calibri', sz: 10, bold: true },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
+  };
+
+  // Apply styles
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { v: '', t: 's' };
+      if (r === 0) {
+        ws[addr].s = headerStyle;
+      } else if (c === 0) {
+        ws[addr].s = lessonNumStyle;
+      } else {
+        ws[addr].s = cellStyle;
+      }
+    }
+  }
+
+  // Row heights — auto-ish, set a minimum
+  ws['!rows'] = [{ hpt: 22 }];
+  for (let r = 1; r <= extractedLessons.length; r++) {
+    ws['!rows'].push({ hpt: 60 });
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Scheme of Work');
+  XLSX.writeFile(wb, 'scheme_of_work.xlsx');
+}
+</script>
+</body>
+</html>
