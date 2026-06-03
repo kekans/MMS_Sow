@@ -519,7 +519,7 @@ function extractKeyRepresentationsFromSlide(xml, context) {
   }));
 
   for (const item of labelDecisions) {
-    if (item.decision.accepted) representations.push(item.label);
+    if (item.decision.accepted && !isIgnoredRepresentationLabel(item.label)) representations.push(item.label);
   }
 
   if (DEBUG_REPRESENTATIONS) {
@@ -599,6 +599,10 @@ function isLikelyRepresentationLabel(text) {
   if (!text) return { accepted: false, reason: 'empty text' };
   if (ignoredLabels.includes(text.toLowerCase())) return { accepted: false, reason: 'section heading' };
   return { accepted: true, reason: 'accepted' };
+}
+
+function isIgnoredRepresentationLabel(text) {
+  return (text || '').trim().toLowerCase() === 'none';
 }
 
 // Extract ALL text from a slide (for exit tickets — grabs every shape)
