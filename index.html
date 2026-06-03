@@ -281,6 +281,7 @@ const FIELD_MAP = {
 
 let extractedLessons = [];
 const DEBUG_MATH = false;
+const DEBUG_VOCAB = false;
 
 // Drop zone
 const dropZone = document.getElementById('dropZone');
@@ -380,15 +381,34 @@ async function parsePptx(zip) {
 
     if (!fields.title && !fields.learningObjectives) continue;
 
-    // Look ahead for the next exit ticket (before the next lesson overview)
+    // Look ahead for the next exit ticket and Key Learning slides before the next lesson overview.
     let exitTicketText = '';
+    const vocabulary = [];
+    const seenVocabulary = new Set();
+
     for (let j = i + 1; j < slideInfo.length; j++) {
       const nextLayout = slideInfo[j].layoutName.toLowerCase();
       if (nextLayout.includes('lesson overview')) break; // hit next lesson, stop
-      if (nextLayout.includes('exit ticket')) {
+
+      if (nextLayout.includes('exit ticket') && !exitTicketText) {
         const etXml = await zip.file(slideInfo[j].path).async('text');
         exitTicketText = extractAllText(etXml);
-        break;
+      }
+
+      if (nextLayout.includes('key learning')) {
+        const klXml = await zip.file(slideInfo[j].path).async('text');
+        const slideVocabulary = extractBoldVocabularyFromSlide(klXml, {
+          slideNum: slideInfo[j].slideNum,
+          layoutName: slideInfo[j].layoutName
+        });
+
+        for (const term of slideVocabulary) {
+          const key = term.toLowerCase();
+          if (!seenVocabulary.has(key)) {
+            seenVocabulary.add(key);
+            vocabulary.push(term);
+          }
+        }
       }
     }
 
@@ -397,7 +417,15 @@ async function parsePptx(zip) {
       fields.exampleQuestion = exitTicketText;
     }
 
-    lessons.push(buildLesson(fields, si.slideNum));
+    if (DEBUG_VOCAB) {
+      console.log('[Vocabulary lesson]', {
+        lessonSlide: si.slideNum,
+        title: fields.title || '',
+        vocabulary
+      });
+    }
+
+    lessons.push(buildLesson(fields, si.slideNum, vocabulary));
   }
 
   return lessons;
@@ -479,6 +507,133 @@ function stripExitTicketBulletPrefixes(text) {
     })
     .join('\n')
     .trim();
+}
+
+function extractBoldVocabularyFromSlide(xml, context = {}) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'text/xml');
+  const terms = [];
+
+  for (const run of doc.getElementsByTagName('*')) {
+    if (!isExplicitBoldRun(run)) continue;
+
+    const rawText = extractRunText(run);
+    const term = cleanVocabularyTerm(rawText);
+    const decision = isLikelyVocabularyTerm(term, run);
+
+    if (DEBUG_VOCAB) {
+      console.log('[Vocabulary bold run]', {
+        slideNum: context.slideNum || '',
+        layoutName: context.layoutName || '',
+        rawText,
+        term,
+        accepted: decision.accepted,
+        reason: decision.reason
+      });
+    }
+
+    if (decision.accepted) {
+      terms.push(term);
+    }
+  }
+
+  return terms;
+}
+
+function isExplicitBoldRun(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE || node.localName !== 'r') return false;
+
+  const runProperties = Array.from(node.children).find(child => child.localName === 'rPr') || null;
+  if (!runProperties) return false;
+
+  const bold = runProperties.getAttribute('b');
+  return bold === '1' || bold === 'true';
+}
+
+function extractRunText(run) {
+  return Array.from(run.childNodes)
+    .filter(node => node.nodeType === Node.ELEMENT_NODE && node.localName !== 'rPr')
+    .map(nodeToText)
+    .join('');
+}
+
+function cleanVocabularyTerm(text) {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[\s"'()[\]{}<>:;,.!?]+|[\s"'()[\]{}<>:;,.!?]+$/g, '')
+    .trim();
+}
+
+function isLikelyVocabularyTerm(term, sourceNode) {
+  if (!term) return { accepted: false, reason: 'empty bold run' };
+  if (isTemplateGuidanceText(term)) return { accepted: false, reason: 'template guidance text' };
+  if (isInsideTemplateGuidanceTable(sourceNode)) return { accepted: false, reason: 'template guidance table' };
+  if (/^\d+$/.test(term)) return { accepted: false, reason: 'number only' };
+  if (!/[A-Za-z]/.test(term)) return { accepted: false, reason: 'symbols only' };
+  if (isLikelyMathExpression(term)) return { accepted: false, reason: 'maths expression' };
+
+  const words = term.match(/[A-Za-z]+(?:-[A-Za-z]+)*/g) || [];
+  if (words.length > 8) return { accepted: false, reason: 'too many words' };
+  if (words.length > 5 && /[.!?;:]|\b(?:use|find|calculate|work|write|solve|show|explain|describe|complete|remember|identify|draw|plot)\b/i.test(term)) {
+    return { accepted: false, reason: 'long instructional sentence' };
+  }
+
+  return { accepted: true, reason: 'accepted' };
+}
+
+function isLikelyMathExpression(term) {
+  const compact = term.replace(/\s+/g, '');
+  if (/^[A-Za-z]$/.test(compact)) return true;
+  if (/^\d+(?:\.\d+)?[A-Za-z]$/.test(compact)) return true;
+  if (/[=<>^_]/.test(term)) return true;
+  if (/\d+\s*\/\s*\d+/.test(term)) return true;
+  if (/[+\-*/]\s*[A-Za-z0-9(]/.test(term) || /[A-Za-z0-9)]\s*[+\-*/]/.test(term)) return true;
+  return false;
+}
+
+function isTemplateGuidanceText(text) {
+  const ignored = [
+    'bold',
+    'component',
+    'purpose',
+    'description',
+    'key learning',
+    'examples',
+    'prior learning',
+    'leading to',
+    'lesson overview',
+    'key representations',
+    'common misconception'
+  ];
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  return ignored.includes(normalized);
+}
+
+function isInsideTemplateGuidanceTable(node) {
+  let parent = node ? node.parentElement : null;
+
+  while (parent) {
+    if (parent.localName === 'tbl') {
+      const tableText = cleanVocabularyTerm(elementText(parent)).toLowerCase();
+      return tableText.includes('component') &&
+        tableText.includes('purpose') &&
+        tableText.includes('description');
+    }
+    parent = parent.parentElement;
+  }
+
+  return false;
+}
+
+function elementText(node) {
+  return Array.from(node.childNodes)
+    .map(child => {
+      if (child.nodeType === Node.TEXT_NODE) return child.textContent || '';
+      if (child.nodeType === Node.ELEMENT_NODE) return elementText(child);
+      return '';
+    })
+    .join('');
 }
 
 function isDrawingMlParagraph(node) {
@@ -885,7 +1040,7 @@ function normalizeStyledMathCharacter(character) {
   return character;
 }
 
-function buildLesson(fields, slideNum) {
+function buildLesson(fields, slideNum, vocabulary = []) {
   let lessonNum = '';
   let lessonTitle = '';
 
@@ -920,7 +1075,7 @@ function buildLesson(fields, slideNum) {
     priorKnowledge: addBullets(fields.priorKnowledge || ''),
     learningObjectives: addBullets(fields.learningObjectives || ''),
     exampleQuestion: fields.exampleQuestion || '',
-    newVocabulary: '',
+    newVocabulary: vocabulary.length ? vocabulary.join('\n') : 'No new vocabulary',
     _slideNum: slideNum
   };
 }
