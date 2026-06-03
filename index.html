@@ -462,7 +462,7 @@ async function parsePptx(zip) {
   }
 
   if (DEBUG_REPRESENTATIONS) {
-    console.log('[Representations final]', representations);
+    console.log('[Representations unit final]', representations);
   }
 
   return { lessons, representations };
@@ -509,11 +509,11 @@ function extractKeyRepresentationsFromSlide(xml, context) {
     .map(entry => entry.text)
     .filter(Boolean)
     .join('\n');
-  const labels = rawText
-    .split('\n')
+  const splitLabels = splitRepresentationText(rawText);
+  const cleanedLabels = splitLabels
     .map(cleanRepresentationLabel)
     .filter(Boolean);
-  const labelDecisions = labels.map(label => ({
+  const labelDecisions = cleanedLabels.map(label => ({
     label,
     decision: isLikelyRepresentationLabel(label)
   }));
@@ -527,16 +527,15 @@ function extractKeyRepresentationsFromSlide(xml, context) {
       slideNum: context.slideNum,
       layoutName: context.layoutName,
       placeholderIdx,
-      placeholders: placeholderEntries.map(entry => ({
-        idx: entry.idx,
-        text: entry.text
-      })),
       rawText,
+      splitLabels,
+      cleanedLabels,
       labels: labelDecisions.map(item => ({
         label: item.label,
         accepted: item.decision.accepted,
         reason: item.decision.reason
-      }))
+      })),
+      acceptedLabels: representations.slice()
     });
   }
 
@@ -568,10 +567,19 @@ function getShapePlaceholderIdx(sp) {
 
 function cleanRepresentationLabel(text) {
   return (text || '')
+    .replace(/\u00A0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[\s"'()[\]{}<>:;,.!?]+|[\s"'()[\]{}<>:;,.!?]+$/g, '')
     .trim();
+}
+
+function splitRepresentationText(text) {
+  return (text || '')
+    .replace(/\u00A0/g, ' ')
+    .split(/(?:\r\n|\r|\n|\t| {3,})+/)
+    .map(part => part.trim())
+    .filter(Boolean);
 }
 
 function normalizeRepresentationKey(text) {
@@ -1275,9 +1283,13 @@ function getRepresentationBandValues() {
 
 function downloadXlsx() {
   const wb = XLSX.utils.book_new();
+  const representationBandValues = getRepresentationBandValues();
+  if (DEBUG_REPRESENTATIONS) {
+    console.log('[Representations XLSX row]', representationBandValues);
+  }
   const wsData = [
     ['Scheme of Work'],
-    getRepresentationBandValues(),
+    representationBandValues,
     COLUMNS
   ];
 
@@ -1295,7 +1307,7 @@ function downloadXlsx() {
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
   // Column widths matching the original scheme of work
-  const columnCount = Math.max(COLUMNS.length, getRepresentationBandValues().length);
+  const columnCount = Math.max(COLUMNS.length, representationBandValues.length);
   ws['!cols'] = [
     { wch: 8 },   // Lesson
     { wch: 22 },  // Lesson title
