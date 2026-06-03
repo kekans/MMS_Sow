@@ -442,13 +442,43 @@ function extractAllText(xml) {
 
   for (const sp of shapes) {
     // Skip shapes that are just labels like "Exit Ticket"
-    const text = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
+    const text = stripExitTicketBulletPrefixes(
+      extractTextFromShape(sp, { includeAutoNumberPrefix: false })
+    );
     if (text && text.trim().toLowerCase() !== 'exit ticket') {
       allTexts.push(text);
     }
   }
 
   return allTexts.join('\n').trim();
+}
+
+function stripExitTicketBulletPrefixes(text) {
+  if (!text) return '';
+
+  return text
+    .split('\n')
+    .map(line => {
+      let current = line;
+
+      while (true) {
+        const strippedBullet = current.replace(/^[ \t]*(?:•\s+|(?:\d+|[A-Za-z])[\.\)]\s+)/, '');
+        if (strippedBullet !== current) {
+          current = strippedBullet;
+          continue;
+        }
+
+        const hyphenMatch = current.match(/^[ \t]*-\s+(.*)$/);
+        if (hyphenMatch && /^(?:•\s+|(?:\d+|[A-Za-z])[\.\)]\s+|[A-Za-z]\s+)/.test(hyphenMatch[1])) {
+          current = hyphenMatch[1];
+          continue;
+        }
+
+        return current;
+      }
+    })
+    .join('\n')
+    .trim();
 }
 
 function isDrawingMlParagraph(node) {
