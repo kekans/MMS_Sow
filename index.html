@@ -173,6 +173,18 @@
     white-space: nowrap;
   }
 
+  .preview-table thead .representations-row th {
+    background: #faf7f4;
+    color: #1a1a1a;
+    border-bottom: 1px solid #d8c6b7;
+    white-space: normal;
+  }
+
+  .preview-table thead .representations-row th:first-child {
+    color: #8b1a2b;
+    font-weight: 700;
+  }
+
   .preview-table tbody td {
     padding: 0.65rem 0.9rem;
     border-bottom: 1px solid #eee;
@@ -247,6 +259,7 @@
     <div class="preview-table-wrap">
       <table class="preview-table" id="previewTable">
         <thead>
+          <tr class="representations-row" id="representationsPreviewRow"></tr>
           <tr>
             <th>Lesson</th>
             <th>Lesson title</th>
@@ -266,6 +279,7 @@
 
 <script>
 const COLUMNS = ['Lesson', 'Lesson title', 'Prior knowledge', 'Learning Objectives', 'Example question', 'New vocabulary'];
+const DEFAULT_SLIDE_DIMENSIONS = { cx: 12192000, cy: 6858000 };
 
 // Placeholder idx → column mapping
 // idx 10 = title (parsed into lesson number + title)
@@ -280,8 +294,10 @@ const FIELD_MAP = {
 };
 
 let extractedLessons = [];
+let extractedRepresentations = [];
 const DEBUG_MATH = false;
 const DEBUG_VOCAB = false;
+const DEBUG_REPRESENTATIONS = false;
 
 // Drop zone
 const dropZone = document.getElementById('dropZone');
@@ -311,7 +327,9 @@ async function handleFile(file) {
 
   try {
     const zip = await JSZip.loadAsync(file);
-    extractedLessons = await parsePptx(zip);
+    const parsed = await parsePptx(zip);
+    extractedLessons = parsed.lessons;
+    extractedRepresentations = parsed.representations;
 
     if (extractedLessons.length === 0) {
       setStatus('No lesson overview slides found. Make sure the PPTX uses layouts named "Lesson overview" or "1_Lesson overview". Exit ticket slides are optional.', 'error');
@@ -329,6 +347,8 @@ async function handleFile(file) {
 // ---- PPTX PARSING ----
 
 async function parsePptx(zip) {
+  const slideDimensions = await getSlideDimensions(zip);
+
   // 1. Find layout files and their names
   const layoutNames = {};
   for (const path of Object.keys(zip.files)) {
@@ -370,6 +390,8 @@ async function parsePptx(zip) {
 
   // 3. Walk slides in order: pair each lesson overview with the next exit ticket
   const lessons = [];
+  const representations = [];
+  const seenRepresentations = new Set();
 
   for (let i = 0; i < slideInfo.length; i++) {
     const si = slideInfo[i];
@@ -380,6 +402,20 @@ async function parsePptx(zip) {
     const fields = extractFields(slideXml);
 
     if (!fields.title && !fields.learningObjectives) continue;
+
+    const slideRepresentations = extractKeyRepresentationsFromSlide(slideXml, {
+      slideNum: si.slideNum,
+      layoutName: si.layoutName,
+      slideDimensions
+    });
+
+    for (const representation of slideRepresentations) {
+      const key = representation.toLowerCase();
+      if (!seenRepresentations.has(key)) {
+        seenRepresentations.add(key);
+        representations.push(representation);
+      }
+    }
 
     // Look ahead for the next exit ticket and Key Learning slides before the next lesson overview.
     let exitTicketText = '';
@@ -428,7 +464,11 @@ async function parsePptx(zip) {
     lessons.push(buildLesson(fields, si.slideNum, vocabulary));
   }
 
-  return lessons;
+  if (DEBUG_REPRESENTATIONS) {
+    console.log('[Representations final]', representations);
+  }
+
+  return { lessons, representations };
 }
 
 // Extract text from specific placeholder indices (for lesson overview slides)
@@ -459,6 +499,126 @@ function extractFields(xml) {
   }
 
   return fields;
+}
+
+async function getSlideDimensions(zip) {
+  const presentationFile = zip.file('ppt/presentation.xml');
+  if (!presentationFile) return DEFAULT_SLIDE_DIMENSIONS;
+
+  const xml = await presentationFile.async('text');
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const slideSize = Array.from(doc.getElementsByTagName('*')).find(el => el.localName === 'sldSz') || null;
+  if (!slideSize) return DEFAULT_SLIDE_DIMENSIONS;
+
+  const cx = parseInt(slideSize.getAttribute('cx'), 10);
+  const cy = parseInt(slideSize.getAttribute('cy'), 10);
+
+  return {
+    cx: Number.isFinite(cx) ? cx : DEFAULT_SLIDE_DIMENSIONS.cx,
+    cy: Number.isFinite(cy) ? cy : DEFAULT_SLIDE_DIMENSIONS.cy
+  };
+}
+
+function extractKeyRepresentationsFromSlide(xml, context) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'text/xml');
+  const shapes = findAllShapes(doc);
+  const representations = [];
+
+  for (const sp of shapes) {
+    const text = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
+    if (!text) continue;
+
+    const bounds = getShapeBounds(sp);
+    const positionDecision = getRepresentationPositionDecision(bounds, context.slideDimensions);
+    const lines = text.split('\n').map(cleanRepresentationLabel).filter(Boolean);
+    const acceptedLines = [];
+    const rejectedLines = [];
+
+    for (const line of lines) {
+      const labelDecision = isLikelyRepresentationLabel(line);
+      if (positionDecision.accepted && labelDecision.accepted) {
+        acceptedLines.push(line);
+        representations.push(line);
+      } else {
+        rejectedLines.push({
+          text: line,
+          reason: positionDecision.accepted ? labelDecision.reason : positionDecision.reason
+        });
+      }
+    }
+
+    if (DEBUG_REPRESENTATIONS) {
+      console.log('[Representations shape]', {
+        slideNum: context.slideNum,
+        layoutName: context.layoutName,
+        slideDimensions: context.slideDimensions,
+        text,
+        x: bounds ? bounds.x : null,
+        y: bounds ? bounds.y : null,
+        cx: bounds ? bounds.cx : null,
+        cy: bounds ? bounds.cy : null,
+        accepted: acceptedLines.length > 0,
+        acceptedLines,
+        rejectedLines,
+        reason: acceptedLines.length > 0 ? 'accepted' : (rejectedLines[0] ? rejectedLines[0].reason : positionDecision.reason)
+      });
+    }
+  }
+
+  return representations;
+}
+
+function getShapeBounds(sp) {
+  const transform = Array.from(sp.getElementsByTagName('*')).find(el => el.localName === 'xfrm') || null;
+  if (!transform) return null;
+
+  const offset = Array.from(transform.children).find(child => child.localName === 'off') || null;
+  const extent = Array.from(transform.children).find(child => child.localName === 'ext') || null;
+  if (!offset || !extent) return null;
+
+  const x = parseInt(offset.getAttribute('x'), 10);
+  const y = parseInt(offset.getAttribute('y'), 10);
+  const cx = parseInt(extent.getAttribute('cx'), 10);
+  const cy = parseInt(extent.getAttribute('cy'), 10);
+
+  if (![x, y, cx, cy].every(Number.isFinite)) return null;
+  return { x, y, cx, cy };
+}
+
+function getRepresentationPositionDecision(bounds, slideDimensions) {
+  if (!bounds) return { accepted: false, reason: 'missing shape transform' };
+
+  const centerX = bounds.x + bounds.cx / 2;
+  const centerY = bounds.y + bounds.cy / 2;
+  const inTopRightQuadrant = centerX >= slideDimensions.cx / 2 && centerY <= slideDimensions.cy / 2;
+
+  return inTopRightQuadrant
+    ? { accepted: true, reason: 'top-right quadrant' }
+    : { accepted: false, reason: 'outside top-right quadrant' };
+}
+
+function cleanRepresentationLabel(text) {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[\s"'()[\]{}<>:;,.!?]+|[\s"'()[\]{}<>:;,.!?]+$/g, '')
+    .trim();
+}
+
+function isLikelyRepresentationLabel(text) {
+  const ignoredLabels = [
+    'key representations',
+    'key concepts',
+    'examples',
+    'prior learning',
+    'leading to',
+    'common misconception'
+  ];
+
+  if (!text) return { accepted: false, reason: 'empty text' };
+  if (ignoredLabels.includes(text.toLowerCase())) return { accepted: false, reason: 'section heading' };
+  return { accepted: true, reason: 'accepted' };
 }
 
 // Extract ALL text from a slide (for exit tickets — grabs every shape)
@@ -1090,6 +1250,8 @@ function buildLesson(fields, slideNum, vocabulary = []) {
 // ---- PREVIEW ----
 
 function renderPreview() {
+  renderRepresentationsPreview();
+
   const tbody = document.getElementById('previewBody');
   tbody.innerHTML = '';
 
@@ -1118,11 +1280,34 @@ function renderPreview() {
   document.getElementById('previewTitle').textContent = `Preview — ${extractedLessons.length} lesson${extractedLessons.length > 1 ? 's' : ''}`;
 }
 
+function renderRepresentationsPreview() {
+  const row = document.getElementById('representationsPreviewRow');
+  row.innerHTML = '';
+
+  getRepresentationBandValues().forEach(value => {
+    const th = document.createElement('th');
+    th.textContent = value;
+    row.appendChild(th);
+  });
+}
+
+function getRepresentationBandValues() {
+  const values = extractedRepresentations.length
+    ? extractedRepresentations
+    : ['No key representations listed'];
+
+  return ['Representations', ...values];
+}
+
 // ---- XLSX GENERATION ----
 
 function downloadXlsx() {
   const wb = XLSX.utils.book_new();
-  const wsData = [COLUMNS];
+  const wsData = [
+    ['Scheme of Work'],
+    getRepresentationBandValues(),
+    COLUMNS
+  ];
 
   extractedLessons.forEach(l => {
     wsData.push([
@@ -1138,6 +1323,7 @@ function downloadXlsx() {
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
   // Column widths matching the original scheme of work
+  const columnCount = Math.max(COLUMNS.length, getRepresentationBandValues().length);
   ws['!cols'] = [
     { wch: 8 },   // Lesson
     { wch: 22 },  // Lesson title
@@ -1146,12 +1332,38 @@ function downloadXlsx() {
     { wch: 36 },  // Example question
     { wch: 18 },  // New vocabulary
   ];
+  while (ws['!cols'].length < columnCount) {
+    ws['!cols'].push({ wch: 22 });
+  }
 
   // Styling
+  const titleStyle = {
+    font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: '8B1A2B' } },
+    alignment: { vertical: 'center' }
+  };
+
   const headerStyle = {
     font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
     fill: { fgColor: { rgb: '8B1A2B' } },
     alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: {
+      top: { style: 'thin', color: { rgb: '000000' } },
+      bottom: { style: 'thin', color: { rgb: '000000' } },
+      left: { style: 'thin', color: { rgb: '000000' } },
+      right: { style: 'thin', color: { rgb: '000000' } }
+    }
+  };
+
+  const representationLabelStyle = {
+    ...headerStyle,
+    font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: '8B1A2B' } },
+    fill: { fgColor: { rgb: 'F5F0EB' } }
+  };
+
+  const representationCellStyle = {
+    font: { name: 'Calibri', sz: 10 },
+    alignment: { vertical: 'top', wrapText: true },
+    fill: { fgColor: { rgb: 'FAF7F4' } },
     border: {
       top: { style: 'thin', color: { rgb: '000000' } },
       bottom: { style: 'thin', color: { rgb: '000000' } },
@@ -1180,10 +1392,18 @@ function downloadXlsx() {
   // Apply styles
   const range = XLSX.utils.decode_range(ws['!ref']);
   for (let r = range.s.r; r <= range.e.r; r++) {
-    for (let c = range.s.c; c <= range.e.c; c++) {
+    const rowLimit = r === 1 ? range.e.c : COLUMNS.length - 1;
+
+    for (let c = range.s.c; c <= rowLimit; c++) {
       const addr = XLSX.utils.encode_cell({ r, c });
       if (!ws[addr]) ws[addr] = { v: '', t: 's' };
       if (r === 0) {
+        ws[addr].s = titleStyle;
+      } else if (r === 1 && c === 0) {
+        ws[addr].s = representationLabelStyle;
+      } else if (r === 1) {
+        ws[addr].s = representationCellStyle;
+      } else if (r === 2) {
         ws[addr].s = headerStyle;
       } else if (c === 0) {
         ws[addr].s = lessonNumStyle;
@@ -1194,8 +1414,8 @@ function downloadXlsx() {
   }
 
   // Row heights — auto-ish, set a minimum
-  ws['!rows'] = [{ hpt: 22 }];
-  for (let r = 1; r <= extractedLessons.length; r++) {
+  ws['!rows'] = [{ hpt: 22 }, { hpt: 32 }, { hpt: 22 }];
+  for (let r = 0; r < extractedLessons.length; r++) {
     ws['!rows'].push({ hpt: 60 });
   }
 
