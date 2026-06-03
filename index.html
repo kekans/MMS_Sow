@@ -1242,7 +1242,7 @@ function buildLesson(fields, slideNum, vocabulary = []) {
     priorKnowledge: addBullets(fields.priorKnowledge || ''),
     learningObjectives: addBullets(fields.learningObjectives || ''),
     exampleQuestion: fields.exampleQuestion || '',
-    newVocabulary: vocabulary.length ? vocabulary.join('\n') : 'No new vocabulary',
+    newVocabulary: vocabulary.length ? vocabulary.join('\n') : 'No new vocabulary introduced in this lesson',
     _slideNum: slideNum
   };
 }
