@@ -279,6 +279,7 @@
 
 <script>
 const COLUMNS = ['Lesson', 'Lesson title', 'Prior knowledge', 'Learning Objectives', 'Example question', 'New vocabulary'];
+const KEY_REPRESENTATIONS_PLACEHOLDER_IDX = 23;
 
 // Placeholder idx → column mapping
 // idx 10 = title (parsed into lesson number + title)
@@ -500,44 +501,25 @@ function extractFields(xml) {
 function extractKeyRepresentationsFromSlide(xml, context) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'text/xml');
-  const shapes = findAllShapes(doc);
+  const placeholderEntries = getPlaceholderEntries(doc);
   const representations = [];
-  const placeholderIdx = getKeyRepresentationsPlaceholderIdx(context.layoutName);
-  let rawText = '';
-
-  if (placeholderIdx === null) {
-    if (DEBUG_REPRESENTATIONS) {
-      console.log('[Representations slide]', {
-        slideNum: context.slideNum,
-        layoutName: context.layoutName,
-        placeholderIdx,
-        rawText,
-        labels: [],
-        reason: 'unsupported lesson overview layout'
-      });
-    }
-
-    return representations;
-  }
-
-  for (const sp of shapes) {
-    if (getShapePlaceholderIdx(sp) !== placeholderIdx) continue;
-    rawText = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
-    break;
-  }
-
-  const labelDecisions = rawText
+  const placeholderIdx = KEY_REPRESENTATIONS_PLACEHOLDER_IDX;
+  const rawText = placeholderEntries
+    .filter(entry => entry.idx === placeholderIdx)
+    .map(entry => entry.text)
+    .filter(Boolean)
+    .join('\n');
+  const labels = rawText
     .split('\n')
     .map(cleanRepresentationLabel)
-    .map(label => ({
-      label,
-      decision: isLikelyRepresentationLabel(label)
-    }));
+    .filter(Boolean);
+  const labelDecisions = labels.map(label => ({
+    label,
+    decision: isLikelyRepresentationLabel(label)
+  }));
 
   for (const item of labelDecisions) {
-    if (item.decision.accepted) {
-      representations.push(item.label);
-    }
+    if (item.decision.accepted) representations.push(item.label);
   }
 
   if (DEBUG_REPRESENTATIONS) {
@@ -545,6 +527,10 @@ function extractKeyRepresentationsFromSlide(xml, context) {
       slideNum: context.slideNum,
       layoutName: context.layoutName,
       placeholderIdx,
+      placeholders: placeholderEntries.map(entry => ({
+        idx: entry.idx,
+        text: entry.text
+      })),
       rawText,
       labels: labelDecisions.map(item => ({
         label: item.label,
@@ -557,11 +543,19 @@ function extractKeyRepresentationsFromSlide(xml, context) {
   return representations;
 }
 
-function getKeyRepresentationsPlaceholderIdx(layoutName) {
-  const normalizedLayout = (layoutName || '').toLowerCase();
-  if (normalizedLayout.includes('1_lesson overview')) return 12;
-  if (normalizedLayout.includes('lesson overview')) return 14;
-  return null;
+function getPlaceholderEntries(doc) {
+  const shapes = findAllShapes(doc);
+  const entries = [];
+
+  for (const sp of shapes) {
+    const idx = getShapePlaceholderIdx(sp);
+    if (idx === null) continue;
+
+    const text = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
+    entries.push({ idx, text: text || '' });
+  }
+
+  return entries;
 }
 
 function getShapePlaceholderIdx(sp) {
