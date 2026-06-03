@@ -1,6 +1,6 @@
 # PPTX to Scheme of Work Converter
 
-Browser-based tool for converting lesson PowerPoints into a formatted Scheme of Work spreadsheet.
+Browser-based tool for convertin-g lesson PowerPoints into a formatted Scheme of Work spreadsheet.
 
 ## Privacy
 
