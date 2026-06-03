@@ -279,7 +279,6 @@
 
 <script>
 const COLUMNS = ['Lesson', 'Lesson title', 'Prior knowledge', 'Learning Objectives', 'Example question', 'New vocabulary'];
-const DEFAULT_SLIDE_DIMENSIONS = { cx: 12192000, cy: 6858000 };
 
 // Placeholder idx → column mapping
 // idx 10 = title (parsed into lesson number + title)
@@ -347,8 +346,6 @@ async function handleFile(file) {
 // ---- PPTX PARSING ----
 
 async function parsePptx(zip) {
-  const slideDimensions = await getSlideDimensions(zip);
-
   // 1. Find layout files and their names
   const layoutNames = {};
   for (const path of Object.keys(zip.files)) {
@@ -405,12 +402,11 @@ async function parsePptx(zip) {
 
     const slideRepresentations = extractKeyRepresentationsFromSlide(slideXml, {
       slideNum: si.slideNum,
-      layoutName: si.layoutName,
-      slideDimensions
+      layoutName: si.layoutName
     });
 
     for (const representation of slideRepresentations) {
-      const key = representation.toLowerCase();
+      const key = normalizeRepresentationKey(representation);
       if (!seenRepresentations.has(key)) {
         seenRepresentations.add(key);
         representations.push(representation);
@@ -501,101 +497,79 @@ function extractFields(xml) {
   return fields;
 }
 
-async function getSlideDimensions(zip) {
-  const presentationFile = zip.file('ppt/presentation.xml');
-  if (!presentationFile) return DEFAULT_SLIDE_DIMENSIONS;
-
-  const xml = await presentationFile.async('text');
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
-  const slideSize = Array.from(doc.getElementsByTagName('*')).find(el => el.localName === 'sldSz') || null;
-  if (!slideSize) return DEFAULT_SLIDE_DIMENSIONS;
-
-  const cx = parseInt(slideSize.getAttribute('cx'), 10);
-  const cy = parseInt(slideSize.getAttribute('cy'), 10);
-
-  return {
-    cx: Number.isFinite(cx) ? cx : DEFAULT_SLIDE_DIMENSIONS.cx,
-    cy: Number.isFinite(cy) ? cy : DEFAULT_SLIDE_DIMENSIONS.cy
-  };
-}
-
 function extractKeyRepresentationsFromSlide(xml, context) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'text/xml');
   const shapes = findAllShapes(doc);
   const representations = [];
+  const placeholderIdx = getKeyRepresentationsPlaceholderIdx(context.layoutName);
+  let rawText = '';
 
-  for (const sp of shapes) {
-    const text = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
-    if (!text) continue;
-
-    const bounds = getShapeBounds(sp);
-    const positionDecision = getRepresentationPositionDecision(bounds, context.slideDimensions);
-    const lines = text.split('\n').map(cleanRepresentationLabel).filter(Boolean);
-    const acceptedLines = [];
-    const rejectedLines = [];
-
-    for (const line of lines) {
-      const labelDecision = isLikelyRepresentationLabel(line);
-      if (positionDecision.accepted && labelDecision.accepted) {
-        acceptedLines.push(line);
-        representations.push(line);
-      } else {
-        rejectedLines.push({
-          text: line,
-          reason: positionDecision.accepted ? labelDecision.reason : positionDecision.reason
-        });
-      }
-    }
-
+  if (placeholderIdx === null) {
     if (DEBUG_REPRESENTATIONS) {
-      console.log('[Representations shape]', {
+      console.log('[Representations slide]', {
         slideNum: context.slideNum,
         layoutName: context.layoutName,
-        slideDimensions: context.slideDimensions,
-        text,
-        x: bounds ? bounds.x : null,
-        y: bounds ? bounds.y : null,
-        cx: bounds ? bounds.cx : null,
-        cy: bounds ? bounds.cy : null,
-        accepted: acceptedLines.length > 0,
-        acceptedLines,
-        rejectedLines,
-        reason: acceptedLines.length > 0 ? 'accepted' : (rejectedLines[0] ? rejectedLines[0].reason : positionDecision.reason)
+        placeholderIdx,
+        rawText,
+        labels: [],
+        reason: 'unsupported lesson overview layout'
       });
     }
+
+    return representations;
+  }
+
+  for (const sp of shapes) {
+    if (getShapePlaceholderIdx(sp) !== placeholderIdx) continue;
+    rawText = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
+    break;
+  }
+
+  const labelDecisions = rawText
+    .split('\n')
+    .map(cleanRepresentationLabel)
+    .map(label => ({
+      label,
+      decision: isLikelyRepresentationLabel(label)
+    }));
+
+  for (const item of labelDecisions) {
+    if (item.decision.accepted) {
+      representations.push(item.label);
+    }
+  }
+
+  if (DEBUG_REPRESENTATIONS) {
+    console.log('[Representations slide]', {
+      slideNum: context.slideNum,
+      layoutName: context.layoutName,
+      placeholderIdx,
+      rawText,
+      labels: labelDecisions.map(item => ({
+        label: item.label,
+        accepted: item.decision.accepted,
+        reason: item.decision.reason
+      }))
+    });
   }
 
   return representations;
 }
 
-function getShapeBounds(sp) {
-  const transform = Array.from(sp.getElementsByTagName('*')).find(el => el.localName === 'xfrm') || null;
-  if (!transform) return null;
-
-  const offset = Array.from(transform.children).find(child => child.localName === 'off') || null;
-  const extent = Array.from(transform.children).find(child => child.localName === 'ext') || null;
-  if (!offset || !extent) return null;
-
-  const x = parseInt(offset.getAttribute('x'), 10);
-  const y = parseInt(offset.getAttribute('y'), 10);
-  const cx = parseInt(extent.getAttribute('cx'), 10);
-  const cy = parseInt(extent.getAttribute('cy'), 10);
-
-  if (![x, y, cx, cy].every(Number.isFinite)) return null;
-  return { x, y, cx, cy };
+function getKeyRepresentationsPlaceholderIdx(layoutName) {
+  const normalizedLayout = (layoutName || '').toLowerCase();
+  if (normalizedLayout.includes('1_lesson overview')) return 12;
+  if (normalizedLayout.includes('lesson overview')) return 14;
+  return null;
 }
 
-function getRepresentationPositionDecision(bounds, slideDimensions) {
-  if (!bounds) return { accepted: false, reason: 'missing shape transform' };
+function getShapePlaceholderIdx(sp) {
+  const ph = Array.from(sp.getElementsByTagName('*')).find(el => el.localName === 'ph') || null;
+  if (!ph) return null;
 
-  const centerX = bounds.x + bounds.cx / 2;
-  const centerY = bounds.y + bounds.cy / 2;
-  const inTopRightQuadrant = centerX >= slideDimensions.cx / 2 && centerY <= slideDimensions.cy / 2;
-
-  return inTopRightQuadrant
-    ? { accepted: true, reason: 'top-right quadrant' }
-    : { accepted: false, reason: 'outside top-right quadrant' };
+  const idx = parseInt(ph.getAttribute('idx'), 10);
+  return Number.isFinite(idx) ? idx : null;
 }
 
 function cleanRepresentationLabel(text) {
@@ -604,6 +578,10 @@ function cleanRepresentationLabel(text) {
     .trim()
     .replace(/^[\s"'()[\]{}<>:;,.!?]+|[\s"'()[\]{}<>:;,.!?]+$/g, '')
     .trim();
+}
+
+function normalizeRepresentationKey(text) {
+  return cleanRepresentationLabel(text).toLowerCase();
 }
 
 function isLikelyRepresentationLabel(text) {
