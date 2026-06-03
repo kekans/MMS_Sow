@@ -442,7 +442,7 @@ function extractAllText(xml) {
 
   for (const sp of shapes) {
     // Skip shapes that are just labels like "Exit Ticket"
-    const text = extractTextFromShape(sp);
+    const text = extractTextFromShape(sp, { includeAutoNumberPrefix: false });
     if (text && text.trim().toLowerCase() !== 'exit ticket') {
       allTexts.push(text);
     }
@@ -620,20 +620,21 @@ function findAllShapes(doc) {
 }
 
 // Extract text from a single shape without flattening nested Office Math XML.
-function extractTextFromShape(sp) {
-  const numberingState = createNumberingState();
+function extractTextFromShape(sp, options) {
+  const includeAutoNumberPrefix = !options || options.includeAutoNumberPrefix !== false;
+  const numberingState = includeAutoNumberPrefix ? createNumberingState() : null;
   const paragraphs = getShapeParagraphs(sp)
-    .map(paragraphNode => extractParagraphText(paragraphNode, numberingState))
+    .map(paragraphNode => extractParagraphText(paragraphNode, numberingState, includeAutoNumberPrefix))
     .filter(paragraph => paragraph !== null && paragraph !== undefined);
 
   return paragraphs.join('\n').trim();
 }
 
-function extractParagraphText(paragraphNode, numberingState) {
+function extractParagraphText(paragraphNode, numberingState, includeAutoNumberPrefix) {
   const bodyText = Array.from(paragraphNode.childNodes)
     .map(nodeToText)
     .join('');
-  const prefix = getNumberedParagraphPrefix(paragraphNode, numberingState);
+  const prefix = includeAutoNumberPrefix ? getNumberedParagraphPrefix(paragraphNode, numberingState) : '';
   const beforeNormalization = `${prefix}${bodyText}`;
   const afterNormalization = normalizeMathText(beforeNormalization);
 
