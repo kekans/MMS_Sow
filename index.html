@@ -520,6 +520,7 @@ function extractBoldVocabularyFromSlide(xml, context = {}) {
     const rawText = extractRunText(run);
     const term = cleanVocabularyTerm(rawText);
     const decision = isLikelyVocabularyTerm(term, run);
+    const displayTerm = sentenceCaseVocabularyTerm(term);
 
     if (DEBUG_VOCAB) {
       console.log('[Vocabulary bold run]', {
@@ -527,13 +528,14 @@ function extractBoldVocabularyFromSlide(xml, context = {}) {
         layoutName: context.layoutName || '',
         rawText,
         term,
+        displayTerm,
         accepted: decision.accepted,
         reason: decision.reason
       });
     }
 
     if (decision.accepted) {
-      terms.push(term);
+      terms.push(displayTerm);
     }
   }
 
@@ -563,6 +565,11 @@ function cleanVocabularyTerm(text) {
     .trim()
     .replace(/^[\s"'()[\]{}<>:;,.!?]+|[\s"'()[\]{}<>:;,.!?]+$/g, '')
     .trim();
+}
+
+function sentenceCaseVocabularyTerm(text) {
+  const normalized = (text || '').toLowerCase();
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : '';
 }
 
 function isLikelyVocabularyTerm(term, sourceNode) {
